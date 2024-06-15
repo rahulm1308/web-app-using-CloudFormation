@@ -1,0 +1,158 @@
+Description: CD12352 - Infrastructure as Code Project - Udagram
+
+Parameters:
+  ServerAMIId:
+    Description: AMI ID for EC2 instances.
+    Type: String
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access
+      VpcId:
+        Fn::ImportValue: UdagramVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  
+  LBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic to load balancer
+      VpcId:
+        Fn::ImportValue: UdagramVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  
+  MyKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: MyKeyPair  # key pair name
+
+  WebAppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        ImageId: !Ref ServerAMIId
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        KeyName: !Ref MyKeyPair  
+        IamInstanceProfile:
+          Name: !Ref InstanceProfile
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            apt-get update -y
+            sudo apt-get install nginx -y
+            service nginx start
+  
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: UdagramPrivateSubnet1Id
+        - Fn::ImportValue: UdagramPrivateSubnet2Id
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebAppLaunchTemplate
+        Version: !GetAtt WebAppLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 4
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref TargetGroup
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: UdagramLB
+      Subnets:
+        - Fn::ImportValue: UdagramPublicSubnet1Id
+        - Fn::ImportValue: UdagramPublicSubnet2Id
+      SecurityGroups:
+        - !Ref LBSecurityGroup
+  
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: AppTargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: UdagramVPCId
+  
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: udagram-static-content-rahul1245
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Status: "Enabled"
+            NoncurrentVersionExpirationInDays: 10
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: InstanceRole 
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub arn:aws:s3:::udagram-static-content-rahul1245/*
+
+Outputs:
+  KeyPairName:
+    Description: Name of the key pair created
+    Value: !Ref MyKeyPair
+    Export:
+      Name: UdagramKeyPairName
+  
+  LoadBalancerDNSName:
+    Description: Load Balancer DNS Name
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: UdagramLoadBalancerDNSName
