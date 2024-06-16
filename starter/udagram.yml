@@ -20,6 +20,15 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.1.0/24
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.2.0/24
+        
   
   LBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -32,6 +41,19 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+  
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ssh from your PC 
+      VpcId:
+        Fn::ImportValue: UdagramVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 192.168.0.103/32
+
   
   MyKeyPair:
     Type: AWS::EC2::KeyPair
@@ -49,12 +71,39 @@ Resources:
         KeyName: !Ref MyKeyPair  
         IamInstanceProfile:
           Name: !Ref InstanceProfile
+        BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10      # Size of the root volume in GB
+            VolumeType: gp3     
+            DeleteOnTermination: true
         UserData:
           Fn::Base64: |
             #!/bin/bash
             apt-get update -y
-            sudo apt-get install nginx -y
+            apt-get install -y nginx awscli
+            aws s3 cp s3://udagram-static-content-rahul1245/index.html /var/www/html/index.html
+            aws s3 cp s3://your-bucket-name/css/ /var/www/html/ --recursive
+            aws s3 cp s3://your-bucket-name/img/ /var/www/html/ --recursive
             service nginx start
+
+  BastionHostInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref ServerAMIId
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !ImportValue UdagramPublicSubnet2Id
+          GroupSet:
+            - !Ref BastionSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10
+            VolumeType: gp3
+            DeleteOnTermination: true
   
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
